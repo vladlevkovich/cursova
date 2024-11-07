@@ -1,66 +1,75 @@
+from aiogram import Dispatcher, Bot
+from aiogram.filters import CommandStart, Command
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import Message, CallbackQuery
+from aiogram.fsm.context import FSMContext
+from services import cup_image
+import asyncio
 import time
-import cv2
 import os
-from deepface import DeepFace
-from pprint import pprint
+
+from pyexpat.errors import messages
+
+token = '7923931120:AAE4ThwpUZ9HUtqNddQ7tWhKrZDXZpc15uI'
+
+bot = Bot(token=token)
+
+dp = Dispatcher()
+
+class UploadPhotoState(StatesGroup):
+    name = State()
+    photo = State()
+
+@dp.message(CommandStart())
+async def welcome(message: Message):
+    return await message.answer('Бот для додавання фото')
 
 
-def save_face(frame, x, y, w, h):
-    face = frame[y:y+h, x:x+w]      # виділяємо область під обличчя
-    timestamp = time.strftime('%Y%m%d-%H%M%S')
-    face_filename = f'detected_faces/face_{timestamp}.jpg'
-    cv2.imwrite(face_filename, face)
-    return face
+@dp.message(Command('photo'))
+async def handle_photo(message: Message, state: FSMContext):
+    await message.answer("Введіть ім'я людини чиє фото хочете завантажити")
+    await state.set_state(UploadPhotoState.name)
+
+@dp.message(UploadPhotoState.name)
+async def input_name(message: Message, state: FSMContext):
+    name = message.text.replace(' ', '')
+    print('name', name)
+    user_folder_path = os.path.join('faces', name)
+    print('path', user_folder_path)
+    if not os.path.exists(user_folder_path):
+        os.makedirs(user_folder_path)
+
+    await state.update_data(name=name)
+    await message.answer('Тепер надішліть фото')
+    await state.set_state(UploadPhotoState.photo)
 
 
-def face_cup():
-    cascade_path = 'filters/haarcascade_frontalface_default.xml'
-    clf = cv2.CascadeClassifier(cascade_path)
-    camera = cv2.VideoCapture(0)
-    last_capture_time = time.time()     # час збереження останнього фото
-    capture_interval = 5   # інтервал збереження
-
-    while True:
-        # зчитуємо дані з камери
-        _, frame = camera.read()
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        # знаходимло обличчя
-        faces = clf.detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30), flags=cv2.CASCADE_SCALE_IMAGE
-        )
-        current_time = time.time()
-        if current_time - last_capture_time >= capture_interval:
-            for x, y, w, h in faces:
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 255, 0), 2)
-                save_face(frame=frame, x=x, y=y, w=w, h=h)
-            last_capture_time = current_time
-                # face_id += 1
-            #     face = frame[y:y+h, x:x+w]  # виділяємо область під обличчя
-            #     face_filename = f'detected_faces/face_{face_id}.jpg'
-            #     cv2.imwrite(face_filename, face)
-            #     face_id += 1
-            #
-        cv2.imshow('Faces', frame)
-
-        if cv2.waitKey(1) == 'q':
-            break
-    camera.release()
-    cv2.destroyAllWindows()
+@dp.message(UploadPhotoState.photo)
+async def upload_photo(message: Message, state: FSMContext):
+    user_data = await state.get_data()
+    name = user_data.get('name')
+    user_folder_path = os.path.join('faces', name)
+    photo = message.photo[-1]
+    photo_path = os.path.join(user_folder_path, f'{photo.file_id}.jpg')
+    await message.answer('Завантажую фото ...')
+    # if not os.path.exists(photo_path) or os.path.getsize(photo_path) == 0:
+    #     return await message.answer('Файл було завантажено не коректно')
+    # await photo.download(destination_file=photo_path)
+    await bot.download(photo, destination=photo_path)
+    await asyncio.sleep(1)
+    cropped_photo_path = os.path.join(user_folder_path, f"cropped_{photo.file_id}.jpg")
+    print('photo_path', photo_path)
+    print('cropped_photo_path', cropped_photo_path)
+    result = cup_image(photo_path, cropped_photo_path)
+    if result == 'Збережено':
+        return await message.answer('Фото збережено!')
+    else:
+        return await message.answer(f'Помилка {result}')
 
 
-def compare_faces(face1_path: str, face2_path: str):
-    # рівнюємо обличчя
-    result = DeepFace.verify(img1_path=face1_path, img2_path=face2_path, enforce_detection=False)
-    pprint(result)
-    return result['verified']   # якшо true то обличчя співпадають якшо false то не співпадають
-
-
-def main():
-    # face_cup()
-    compare_faces('faces/face_20240919-132452.jpg', 'detected_faces/face_0.jpg')
+async def main():
+    await dp.start_polling(bot)
 
 
 if __name__ == '__main__':
-    main()
-
+    asyncio.run(main())
